@@ -17,7 +17,6 @@ pub async fn resolve_staking_round(
         staking_account_key
     );
 
-
     let transfer_authority_pda = get_transfer_authority_pda().0;
     let staking_staked_token_vault_pda =
         adrena_abi::pda::get_staking_staked_token_vault_pda(staking_account_key).0;

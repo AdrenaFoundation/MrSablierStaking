@@ -294,7 +294,7 @@ async fn main() -> anyhow::Result<()> {
 
             // ////////////////////////////////////////////////////////////////
             log::info!("1 - Retrieving and indexing all Staking andUserStaking accounts...");
-            {
+            let existing_user_staking_accounts_without_staking_type = {
                 // Staking accounts
                 {
                 let staking_pda_filter = RpcFilterType::Memcmp(Memcmp::new_base58_encoded(
@@ -318,7 +318,7 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 // User staking accounts
-                {
+                let existing_user_staking_accounts_without_staking_type = {
                     let user_staking_pda_filter = RpcFilterType::Memcmp(Memcmp::new_base58_encoded(
                         0,
                         &get_user_staking_anchor_discriminator(),
@@ -328,29 +328,32 @@ async fn main() -> anyhow::Result<()> {
                         .accounts::<UserStaking>(filters)
                         .await
                         .map_err(|e| backoff::Error::transient(e.into()))?;
-                    {
+                    let existing_user_staking_accounts_without_staking_type = {
                         let mut indexed_user_staking_accounts = indexed_user_staking_accounts.write().await;
 
                         // filter out the accounts that have no staking type defined yet
-                        let existing_user_staking_accounts_len = existing_user_staking_accounts.len();
-                        let existing_user_staking_accounts_with_staking_type: HashMap<Pubkey, UserStaking> = existing_user_staking_accounts.into_iter().filter(|a| a.1.staking_type != 0).collect();
-                        log::info!("  <> # of existing UserStaking accounts w/o staking type defined filtered out: {}", existing_user_staking_accounts_len - existing_user_staking_accounts_with_staking_type.len());
+                        let (existing_user_staking_accounts_with_staking_type, existing_user_staking_accounts_without_staking_type): (HashMap<Pubkey, UserStaking>, HashMap<Pubkey, UserStaking>) =
+                            existing_user_staking_accounts.into_iter().partition(|(_, account)| account.staking_type != 0);
+                        log::info!("  <> # of existing UserStaking accounts w/o staking type defined filtered out: {}", existing_user_staking_accounts_without_staking_type.len());
 
                         indexed_user_staking_accounts.extend(existing_user_staking_accounts_with_staking_type);
-                    }
+                        // return the accounts without staking type defined
+                        existing_user_staking_accounts_without_staking_type
+                    };
                     log::info!(
                         "  <> # of existing UserStaking accounts parsed and loaded: {}",
                         indexed_user_staking_accounts.read().await.len()
                     );
-                }
+                    existing_user_staking_accounts_without_staking_type
+                };
 
                 // Update for current Staking accounts
                 update_staking_round_next_resolve_time_cache(&staking_round_next_resolve_time_cache, &indexed_staking_accounts).await;
 
                 // Update for current UserStaking accounts
                 update_claim_cache(&claim_cache, &indexed_user_staking_accounts).await;
-
-            }
+                existing_user_staking_accounts_without_staking_type
+            };
             // ////////////////////////////////////////////////////////////////
 
             // ////////////////////////////////////////////////////////////////
@@ -406,6 +409,30 @@ async fn main() -> anyhow::Result<()> {
                     })
                 });
             }
+
+                    // DO a custom processing here for the accounts without staking type defined
+                    // We want to call a claim stake for them in order to get the staking type defined
+                    for (user_staking_account_key, user_staking_account) in existing_user_staking_accounts_without_staking_type {
+                        // retrieve the owner of the UserStaking account
+                        let owner_pubkey = {
+                            log::info!("Claiming stake for UserStaking account: {}", user_staking_account_key);
+                            let rows = db
+                                .query("SELECT user_pubkey FROM ref_user_staking WHERE user_staking_pubkey = $1::TEXT", &[&user_staking_account_key.to_string()])
+                                .await.map_err(|e| backoff::Error::transient(e.into()))?;
+                            
+                            // let row = rows.first().expect("No row for user staking account");
+                            let Some(row) = rows.first() else {
+                                continue;
+                            };
+                            Pubkey::from_str(row.get::<_, String>(0).as_str()).expect("Invalid pubkey")
+                        };
+
+                        // Run once with ADX, then with ALP
+                        handlers::claim_stakes(&user_staking_account_key, &owner_pubkey, &program, *median_priority_fee.lock().await, &ADX_MINT).await?;
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        handlers::claim_stakes(&user_staking_account_key, &owner_pubkey, &program, *median_priority_fee.lock().await, &ALP_MINT).await?;
+                    }
+                    std::process::abort(); // TESTS
 
             // ////////////////////////////////////////////////////////////////
             // CORE LOOP
