@@ -2,11 +2,12 @@ use {
     crate::{handlers::create_claim_stakes_ix, CLAIM_STAKES_CU_LIMIT},
     adrena_abi::{
         get_staking_lm_reward_token_vault_pda, get_staking_pda, get_staking_reward_token_vault_pda,
-        get_transfer_authority_pda,
+        get_transfer_authority_pda, ADX_MINT, SPL_TOKEN_PROGRAM_ID, USDC_MINT,
     },
     anchor_client::Program,
     solana_client::rpc_config::RpcSendTransactionConfig,
     solana_sdk::{compute_budget::ComputeBudgetInstruction, pubkey::Pubkey, signature::Keypair},
+    spl_associated_token_account::instruction::create_associated_token_account_idempotent,
     std::sync::Arc,
 };
 
@@ -46,6 +47,18 @@ pub async fn claim_stakes(
         ))
         .instruction(ComputeBudgetInstruction::set_compute_unit_limit(
             CLAIM_STAKES_CU_LIMIT,
+        ))
+        .instruction(create_associated_token_account_idempotent(
+            &program.payer(),
+            owner_pubkey,
+            &ADX_MINT,
+            &SPL_TOKEN_PROGRAM_ID,
+        ))
+        .instruction(create_associated_token_account_idempotent(
+            &program.payer(),
+            owner_pubkey,
+            &USDC_MINT,
+            &SPL_TOKEN_PROGRAM_ID,
         ))
         .args(claim_stakes_params)
         .accounts(claim_stakes_accounts)

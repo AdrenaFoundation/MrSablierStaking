@@ -47,6 +47,7 @@ anchor-client = { git = "https://github.com/coral-xyz/anchor.git", rev = "fe4fcd
 tokio-postgres = "0.7.12"
 postgres-openssl = "0.5.0"
 openssl = "0.10.50"
+spl-associated-token-account = "5.0.1"
 
 [profile.release]
 lto = true
