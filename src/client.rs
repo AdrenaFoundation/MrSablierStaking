@@ -547,7 +547,6 @@ pub async fn process_claim_stakes(
                     StakingType::LP => ALP_MINT,
                 };
 
-                // Do a claim stake for the UserStaking account if we have a staked token mint
                 handlers::claim_stakes(
                     user_staking_account_key,
                     &owner_pubkey,
