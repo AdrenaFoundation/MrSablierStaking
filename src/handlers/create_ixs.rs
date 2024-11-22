@@ -1,6 +1,7 @@
 use {
+    crate::IndexedCustodiesThreadSafe,
     adrena_abi::{
-        ADRENA_GOVERNANCE_REALM_CONFIG_ID, ADRENA_GOVERNANCE_REALM_ID,
+        pda, ADRENA_GOVERNANCE_REALM_CONFIG_ID, ADRENA_GOVERNANCE_REALM_ID,
         ADRENA_GOVERNANCE_SHADOW_TOKEN_MINT, ADX_MINT, CORTEX_ID, GENESIS_LOCK_ID,
         GOVERNANCE_PROGRAM_ID, MAIN_POOL_ID, SPL_ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
         USDC_MINT,
@@ -138,4 +139,43 @@ pub fn create_finalize_locked_stake_ix(
     };
     let accounts = finalize_locked_stake;
     (args, accounts)
+}
+
+pub async fn create_update_pool_aum_ix(
+    payer: &Pubkey,
+    pool_id: Pubkey,
+    custodies: &IndexedCustodiesThreadSafe,
+) -> (
+    adrena_abi::instruction::UpdatePoolAum,
+    adrena_abi::accounts::UpdatePoolAum,
+    Vec<Pubkey>, // remaining accounts
+) {
+    let args = adrena_abi::instruction::UpdatePoolAum {};
+
+    // for each custodies, derives its oracle and trade oracle
+    let oracle_accounts = custodies
+        .read()
+        .await
+        .iter()
+        .filter_map(|(_key, custody)| {
+            // skip if not the right pool
+            if custody.pool != pool_id {
+                return None;
+            }
+            let token_account_pda = pda::get_custody_token_account_pda(&pool_id, &custody.mint).0;
+            let trade_oracle = custody.trade_oracle;
+            Some((token_account_pda, trade_oracle))
+        })
+        .collect::<Vec<(Pubkey, Pubkey)>>();
+
+    let accounts = adrena_abi::accounts::UpdatePoolAum {
+        payer: *payer,
+        pool: pool_id,
+        cortex: CORTEX_ID,
+    };
+    let remaining_accounts = oracle_accounts
+        .iter()
+        .map(|(token_account_pda, _)| *token_account_pda)
+        .collect::<Vec<Pubkey>>();
+    (args, accounts, remaining_accounts)
 }

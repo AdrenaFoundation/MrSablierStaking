@@ -1,13 +1,14 @@
 use {
     crate::{process_stream_message::process_stream_message, update_caches::update_claim_cache},
     adrena_abi::{
-        Discriminator, Staking, StakingType, UserStaking, ADX_MINT, ALP_MINT,
-        ROUND_MIN_DURATION_SECONDS,
+        Custody, Discriminator, Staking, StakingType, UserStaking, ADX_MINT, ALP_MINT,
+        MAIN_POOL_ID, ROUND_MIN_DURATION_SECONDS,
     },
     anchor_client::{solana_sdk::signer::keypair::read_keypair_file, Client, Cluster, Program},
     backoff::{future::retry, ExponentialBackoff},
     clap::Parser,
     futures::{StreamExt, TryFutureExt},
+    handlers::update_pool_aum,
     openssl::ssl::{SslConnector, SslMethod},
     postgres_openssl::MakeTlsConnector,
     priority_fees::fetch_mean_priority_fee,
@@ -41,6 +42,7 @@ type AccountFilterMap = HashMap<String, SubscribeRequestFilterAccounts>;
 
 type IndexedStakingAccountsThreadSafe = Arc<RwLock<HashMap<Pubkey, Staking>>>;
 type IndexedUserStakingAccountsThreadSafe = Arc<RwLock<HashMap<Pubkey, UserStaking>>>;
+type IndexedCustodiesThreadSafe = Arc<RwLock<HashMap<Pubkey, Custody>>>;
 // Cache the claim time of the oldest locked stake for each user staking account - This is used to determine when we should trigger the next auto claim
 // If none, no auto claim is needed
 type UserStakingClaimCacheThreadSafe = Arc<RwLock<HashMap<Pubkey, Option<i64>>>>;
@@ -210,6 +212,8 @@ async fn main() -> anyhow::Result<()> {
     // The array of indexed Locked Staking accounts (these are the users locked stakes, mixing ADX and ALP)
     let indexed_user_staking_accounts: IndexedUserStakingAccountsThreadSafe =
         Arc::new(RwLock::new(HashMap::new()));
+    // The array of indexed Custodies
+    let indexed_custodies: IndexedCustodiesThreadSafe = Arc::new(RwLock::new(HashMap::new()));
     let claim_cache: UserStakingClaimCacheThreadSafe = Arc::new(RwLock::new(HashMap::new()));
     let staking_round_next_resolve_time_cache: StakingRoundNextResolveTimeCacheThreadSafe =
         Arc::new(RwLock::new(HashMap::new()));
@@ -224,6 +228,7 @@ async fn main() -> anyhow::Result<()> {
         let zero_attempts = Arc::clone(&zero_attempts);
         let indexed_staking_accounts = Arc::clone(&indexed_staking_accounts);
         let indexed_user_staking_accounts = Arc::clone(&indexed_user_staking_accounts);
+        let indexed_custodies = Arc::clone(&indexed_custodies);
         let claim_cache = Arc::clone(&claim_cache);
         let staking_round_next_resolve_time_cache = Arc::clone(&staking_round_next_resolve_time_cache);
         let finalize_locked_stakes_cache = Arc::clone(&finalize_locked_stakes_cache);
@@ -288,6 +293,30 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // ////////////////////////////////////////////////////////////////
+            log::info!("0 - Retrieving and indexing all Custodies...");
+            {
+                // Custodies - from all pools - DOES NOT HANDLES if new custodies are created during the script is running (very edge, reload in that case)
+                {
+                let custody_pda_filter = RpcFilterType::Memcmp(Memcmp::new_base58_encoded(
+                    0,
+                    Custody::DISCRIMINATOR,
+                ));
+                let filters = vec![custody_pda_filter];
+                let existing_custodies = program
+                    .accounts::<Custody>(filters)
+                    .await
+                    .map_err(|e| backoff::Error::transient(e.into()))?;
+                {
+                    let mut indexed_custodies = indexed_custodies.write().await;
+                        indexed_custodies.extend(existing_custodies);
+                    }
+                    log::info!(
+                        "  <> # of existing Custodies parsed and loaded: {}",
+                        indexed_custodies.read().await.len()
+                    );
+                }
+            }
+
             log::info!("1 - Retrieving and indexing all Staking andUserStaking accounts...");
             {
                 // Staking accounts
@@ -304,12 +333,12 @@ async fn main() -> anyhow::Result<()> {
                 {
                     let mut indexed_staking_accounts = indexed_staking_accounts.write().await;
 
-                    indexed_staking_accounts.extend(existing_staking_accounts);
-                }
-                log::info!(
-                    "  <> # of existing Staking accounts parsed and loaded: {}",
-                    indexed_staking_accounts.read().await.len()
-                );
+                        indexed_staking_accounts.extend(existing_staking_accounts);
+                    }
+                    log::info!(
+                        "  <> # of existing Staking accounts parsed and loaded: {}",
+                        indexed_staking_accounts.read().await.len()
+                    );
                 }
 
                 // User staking accounts
@@ -475,6 +504,9 @@ async fn main() -> anyhow::Result<()> {
                 // let start = std::time::Instant::now();
                 process_finalize_locked_stakes(&finalize_locked_stakes_cache, &indexed_user_staking_accounts, &db, &program, *median_priority_fee_low.lock().await).await?;
                 // log::info!("process_finalize_locked_stakes took {:?}", start.elapsed());
+
+                // Update pool AUM
+                update_pool_aum(MAIN_POOL_ID, &program, *median_priority_fee_high.lock().await, &indexed_custodies).await?;
             }
 
             Ok::<(), backoff::Error<anyhow::Error>>(())
