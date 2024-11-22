@@ -5,6 +5,7 @@ use {
         UserStakingClaimCacheThreadSafe,
     },
     adrena_abi::{Pubkey, Staking, UserStaking, ROUND_MIN_DURATION_SECONDS},
+    rand::{thread_rng, Rng},
     std::collections::HashMap,
 };
 
@@ -20,7 +21,9 @@ pub async fn update_staking_round_next_resolve_time_cache_for_account(
     let next_resolve_time = if round_current_duration >= ROUND_MIN_DURATION_SECONDS {
         current_time
     } else {
-        staking_account.current_staking_round.start_time + ROUND_MIN_DURATION_SECONDS
+        staking_account.current_staking_round.start_time
+            + ROUND_MIN_DURATION_SECONDS
+            + thread_rng().gen_range(600..1800) // adding random + 10 to 60 min, to prevent staggering all claims together, and also for taking into account the slight delay in round execution
     };
 
     staking_round_next_resolve_time_cache
