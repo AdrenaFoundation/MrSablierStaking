@@ -129,7 +129,7 @@ pub async fn claim_stakes(
             log::info!("   <> CU consumed: {}", simulated_cu);
         }
 
-        println!("   <> Simulation logs: {:?}", simulation_logs);
+        // println!("   <> Simulation logs: {:?}", simulation_logs);
 
         if simulation_logs
             .iter()
