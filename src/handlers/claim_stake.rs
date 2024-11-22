@@ -100,7 +100,8 @@ pub async fn claim_stakes(
         };
 
         let simulated_cu = simulation.value.units_consumed.unwrap_or(0);
-        let simulation_logs = simulation.value.logs.unwrap_or(vec![]);
+        // let simulation_logs = simulation.value.logs.unwrap_or(vec![]);
+        // println!("   <> Simulation logs: {:?}", simulation_logs);
 
         if simulated_cu == 0 {
             log::warn!(
@@ -127,19 +128,6 @@ pub async fn claim_stakes(
             continue;
         } else {
             log::info!("   <> CU consumed: {}", simulated_cu);
-        }
-
-        // println!("   <> Simulation logs: {:?}", simulation_logs);
-
-        if simulation_logs
-            .iter()
-            .any(|l| l.contains("Program log: Distribute 0 lm rewards"))
-        {
-            log::warn!(
-                "   <> No lm rewards to claim - skipping claim for UserStaking account: {}",
-                user_staking_account_key
-            );
-            break;
         }
 
         let (claim_stakes_params, claim_stakes_accounts) = create_claim_stakes_ix(

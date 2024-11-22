@@ -6,7 +6,7 @@ use {
     },
     adrena_abi::{Pubkey, Staking, UserStaking, ROUND_MIN_DURATION_SECONDS},
     rand::{thread_rng, Rng},
-    std::collections::HashMap,
+    std::{cmp::min, collections::HashMap},
 };
 
 pub async fn update_staking_round_next_resolve_time_cache_for_account(
@@ -70,12 +70,36 @@ pub async fn update_claim_cache_for_account(
     account_key: Pubkey,
     user_staking_account: &UserStaking,
 ) {
-    let oldest_claim_time = user_staking_account
+    let has_locked_stakes = user_staking_account
         .locked_stakes
         .iter()
-        .filter(|stake| stake.amount != 0)
-        .map(|stake| stake.claim_time)
-        .min();
+        .any(|stake| stake.amount != 0);
+    let has_liquid_stake = user_staking_account.liquid_stake.amount != 0;
+
+    let oldest_claim_time_locked = if has_locked_stakes {
+        user_staking_account
+            .locked_stakes
+            .iter()
+            .filter(|stake| stake.amount != 0)
+            .map(|stake| stake.claim_time)
+            .min()
+    } else {
+        None
+    };
+
+    let oldest_claim_time_liquid = if has_liquid_stake {
+        Some(user_staking_account.liquid_stake.claim_time)
+    } else {
+        None
+    };
+
+    let oldest_claim_time = match (oldest_claim_time_locked, oldest_claim_time_liquid) {
+        (Some(locked), Some(liquid)) => Some(min(locked, liquid)),
+        (Some(locked), None) => Some(locked),
+        (None, Some(liquid)) => Some(liquid),
+        (None, None) => None,
+    };
+
     claim_cache
         .write()
         .await

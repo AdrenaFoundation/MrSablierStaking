@@ -59,7 +59,7 @@ const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:10000";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MEAN_PRIORITY_FEE_PERCENTILE_RESOLVE_STAKING_ROUND: u64 = 3500; // 35th
-const MEAN_PRIORITY_FEE_PERCENTILE_CLAIM_STAKES: u64 = 1500; // 15th
+const MEAN_PRIORITY_FEE_PERCENTILE_CLAIM_STAKES: u64 = 2500; // 25th
 const PRIORITY_FEE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 pub const RESOLVE_STAKING_ROUND_CU_LIMIT: u32 = 400_000;
 
@@ -527,12 +527,13 @@ pub async fn process_claim_stakes(
     for (user_staking_account_key, last_claim_time) in claim_cache_shallow_copy
         .iter()
         .filter(|(_, last_claim_time)| last_claim_time.is_some())
+    // If the last claim time is None, it means the user has no stake and we should not claim for them
     {
         if claim_count >= max_claims_per_loop {
             log::info!("Batch size reached - stopping claim processing until next loop");
             break;
         }
-        if current_time >= last_claim_time.unwrap_or(0) + AUTO_CLAIM_THRESHOLD_SECONDS {
+        if current_time >= last_claim_time.unwrap() + AUTO_CLAIM_THRESHOLD_SECONDS {
             // retrieve the owner of the UserStaking account
             if let Some(owner_pubkey) = get_owner_pubkey(db, user_staking_account_key).await? {
                 // Retrieve the UserStaking account
@@ -547,15 +548,23 @@ pub async fn process_claim_stakes(
                     StakingType::LP => ALP_MINT,
                 };
 
-                handlers::claim_stakes(
-                    user_staking_account_key,
-                    &owner_pubkey,
-                    program,
-                    median_priority_fee,
-                    &staked_token_mint,
-                )
-                .await
-                .map_err(|e| backoff::Error::transient(anyhow::anyhow!(e)))?;
+                let has_stake = user_staking_account
+                    .locked_stakes
+                    .iter()
+                    .any(|ls| ls.amount != 0)
+                    || user_staking_account.liquid_stake.amount != 0;
+
+                if has_stake {
+                    handlers::claim_stakes(
+                        user_staking_account_key,
+                        &owner_pubkey,
+                        program,
+                        median_priority_fee,
+                        &staked_token_mint,
+                    )
+                    .await
+                    .map_err(|e| backoff::Error::transient(anyhow::anyhow!(e)))?;
+                }
                 claim_count += 1;
             } else {
                 log::warn!(
