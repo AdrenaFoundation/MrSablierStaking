@@ -148,6 +148,7 @@ async fn generate_accounts_filter_map(
             account: vec![],
             owner: staking_owner,
             filters: vec![staking_filter_discriminator],
+            nonempty_txn_signature: None,
         },
     );
     // We don't monitor Staking accounts for close events - These are ever lasting accounts
@@ -177,6 +178,7 @@ async fn generate_accounts_filter_map(
             account: vec![],
             owner: user_staking_owner,
             filters: vec![user_staking_filter_discriminator],
+            nonempty_txn_signature: None,
         },
     );
 
@@ -187,6 +189,7 @@ async fn generate_accounts_filter_map(
             account: existing_user_staking_accounts_keys,
             owner: vec![],
             filters: vec![],
+            nonempty_txn_signature: None,
         },
     );
 
