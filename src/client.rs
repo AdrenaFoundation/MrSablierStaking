@@ -492,10 +492,10 @@ async fn main() -> anyhow::Result<()> {
             // ////////////////////////////////////////////////////////////////
             log::info!("4 - Start core loop: processing gRPC stream...");
             // Create intervals for each task
-            let mut resolve_staking_rounds_interval = interval(Duration::from_secs(10));
+            let mut resolve_staking_rounds_interval = interval(Duration::from_secs(1));
             let mut claim_stakes_interval = interval(Duration::from_secs(20));
             let mut finalize_locked_stakes_interval = interval(Duration::from_secs(20));
-            let mut update_pool_aum_interval = interval(Duration::from_secs(60));
+            let mut update_pool_aum_interval = interval(Duration::from_secs(300));
 
             loop {
                 tokio::select! {
