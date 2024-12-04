@@ -15,7 +15,7 @@ name = "mrsablierstaking"
 
 
 [dependencies]
-adrena-abi = { git = "https://github.com/AdrenaFoundation/adrena-abi.git", rev = "a0880677cedc1f1c3cd3988afbb1dd2afec49dbb" }
+adrena-abi = { git = "https://github.com/AdrenaFoundation/adrena-abi.git", rev = "0047f78573e4da73875dbdfe5e2d4ea303c1c14f" } # cannot use latest as there is an issue updating crate with TLS
 # anchor-client = { version = "0.29.0", features = ["async"] }
 # Waiting for 0.31.0 release - includes a fix on the async - https://github.com/coral-xyz/anchor/pull/3057
 anchor-client = { git = "https://github.com/coral-xyz/anchor.git", rev = "fe4fcded34a68934a6017a85d43a307cdb86d803", features = [
