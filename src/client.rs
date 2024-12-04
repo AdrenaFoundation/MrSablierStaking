@@ -37,11 +37,16 @@ use {
         },
     },
 };
+use solana_sdk::instruction::AccountMeta;
+use crate::handlers::update_pool_aum;
+use adrena_abi::Custody;
+use adrena_abi::Pool;
 
 type AccountFilterMap = HashMap<String, SubscribeRequestFilterAccounts>;
 
 type IndexedStakingAccountsThreadSafe = Arc<RwLock<HashMap<Pubkey, Staking>>>;
 type IndexedUserStakingAccountsThreadSafe = Arc<RwLock<HashMap<Pubkey, UserStaking>>>;
+type IndexedCustodiesThreadSafe = Arc<RwLock<HashMap<Pubkey, Custody>>>;
 // Cache the claim time of the oldest locked stake for each user staking account - This is used to determine when we should trigger the next auto claim
 // If none, no auto claim is needed
 type UserStakingClaimCacheThreadSafe = Arc<RwLock<HashMap<Pubkey, Option<i64>>>>;
@@ -63,6 +68,7 @@ const MEAN_PRIORITY_FEE_PERCENTILE_RESOLVE_STAKING_ROUND: u64 = 3500; // 35th
 const MEAN_PRIORITY_FEE_PERCENTILE_CLAIM_STAKES: u64 = 3500; // 35th
 const PRIORITY_FEE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 pub const RESOLVE_STAKING_ROUND_CU_LIMIT: u32 = 400_000;
+pub const UPDATE_AUM_CU_LIMIT: u32 = 100_000;
 
 // The threshold to trigger a claim of the stakes for a UserStaking account - we can store up to 32 rounds data per account, we do so to avoid loosing rewards
 pub const AUTO_CLAIM_THRESHOLD_SECONDS: i64 = ROUND_MIN_DURATION_SECONDS * 20; // this means that we will claim ~5 days if the user has not claim during that time
@@ -211,6 +217,8 @@ async fn main() -> anyhow::Result<()> {
     // The array of indexed Locked Staking accounts (these are the users locked stakes, mixing ADX and ALP)
     let indexed_user_staking_accounts: IndexedUserStakingAccountsThreadSafe =
         Arc::new(RwLock::new(HashMap::new()));
+    // The array of indexed custodies - These are not directly observed, but are needed for instructions and to keep track of which price update v2 accounts are observed
+    let indexed_custodies: IndexedCustodiesThreadSafe = Arc::new(RwLock::new(HashMap::new()));
     let claim_cache: UserStakingClaimCacheThreadSafe = Arc::new(RwLock::new(HashMap::new()));
     let staking_round_next_resolve_time_cache: StakingRoundNextResolveTimeCacheThreadSafe =
         Arc::new(RwLock::new(HashMap::new()));
@@ -225,23 +233,16 @@ async fn main() -> anyhow::Result<()> {
         let zero_attempts = Arc::clone(&zero_attempts);
         let indexed_staking_accounts = Arc::clone(&indexed_staking_accounts);
         let indexed_user_staking_accounts = Arc::clone(&indexed_user_staking_accounts);
+        let indexed_custodies = Arc::clone(&indexed_custodies);
         let claim_cache = Arc::clone(&claim_cache);
         let staking_round_next_resolve_time_cache = Arc::clone(&staking_round_next_resolve_time_cache);
         let finalize_locked_stakes_cache = Arc::clone(&finalize_locked_stakes_cache);
         let mut periodical_priority_fees_fetching_task: Option<JoinHandle<Result<(), backoff::Error<anyhow::Error>>>> = None;
-        let mut periodical_claim_stakes_task: Option<JoinHandle<Result<(), backoff::Error<anyhow::Error>>>> = None;
-        let mut periodical_resolve_staking_rounds_task: Option<JoinHandle<Result<(), backoff::Error<anyhow::Error>>>> = None;
         let mut db_connection_task: Option<JoinHandle<()>> = None;
 
         async move {
             // In case it errored out, abort the fee task (will be recreated)
             if let Some(t) = periodical_priority_fees_fetching_task.take() {
-                t.abort();
-            }
-            if let Some(t) = periodical_claim_stakes_task.take() {
-                t.abort();
-            }
-            if let Some(t) = periodical_resolve_staking_rounds_task.take() {
                 t.abort();
             }
             if let Some(t) = db_connection_task.take() {
@@ -287,6 +288,34 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }));
             }
+
+            // Fetched once
+            let pool = program
+                .account::<Pool>(adrena_abi::MAIN_POOL_ID)
+                .await
+                .map_err(|e| backoff::Error::transient(e.into()))?;
+
+
+            // ////////////////////////////////////////////////////////////////
+            log::info!("0 - Retrieving and indexing existing custodies...");
+            {
+                let custody_pda_filter = RpcFilterType::Memcmp(Memcmp::new_base58_encoded(
+                    0,
+                    &Custody::DISCRIMINATOR,
+                ));
+                let filters = vec![custody_pda_filter];
+                let existing_custodies_accounts = program
+                    .accounts::<Custody>(filters)
+                    .await
+                    .map_err(|e| backoff::Error::transient(e.into()))?;
+                // Extend the indexed custodies map with the existing custodies
+                indexed_custodies.write().await.extend(existing_custodies_accounts);
+                log::info!(
+                    "  <> # of existing custodies parsed and loaded: {}",
+                    indexed_custodies.read().await.len()
+                );
+            }
+            // ////////////////////////////////////////////////////////////////
 
             // ////////////////////////////////////////////////////////////////
             log::info!("1 - Retrieving and indexing all Staking andUserStaking accounts...");
@@ -421,6 +450,38 @@ async fn main() -> anyhow::Result<()> {
                 });
             }
 
+            let mut custodies_accounts: Vec<AccountMeta> = vec![];
+            let mut custodies_oracle_accounts: Vec<AccountMeta> = vec![];
+            let mut custodies_trade_oracle_accounts: Vec<AccountMeta> = vec![];
+            for key in pool.custodies.iter() {
+                if key != &Pubkey::default() {
+                    
+                    custodies_accounts.push(AccountMeta {
+                        pubkey: key.clone(),
+                        is_signer: false,
+                        is_writable: false,
+                    });
+                    
+                    let oracle_key = indexed_custodies.read().await[key].oracle;
+                    custodies_oracle_accounts.push(AccountMeta {
+                        pubkey: oracle_key,
+                        is_signer: false,
+                        is_writable: false,
+                    });
+                    
+                    let trade_oracle_key = indexed_custodies.read().await[key].trade_oracle;
+                    if trade_oracle_key != oracle_key {
+                        custodies_trade_oracle_accounts.push(AccountMeta {
+                            pubkey: trade_oracle_key,
+                            is_signer: false,
+                            is_writable: false,
+                        });
+                    }
+                }
+            }
+
+            let remaining_accounts = [custodies_accounts, custodies_oracle_accounts, custodies_trade_oracle_accounts].concat();
+
             // ////////////////////////////////////////////////////////////////
             // CORE LOOP
             //
@@ -431,9 +492,10 @@ async fn main() -> anyhow::Result<()> {
             // ////////////////////////////////////////////////////////////////
             log::info!("4 - Start core loop: processing gRPC stream...");
             // Create intervals for each task
-            let mut resolve_staking_rounds_interval = interval(Duration::from_secs(5));
+            let mut resolve_staking_rounds_interval = interval(Duration::from_secs(1));
             let mut claim_stakes_interval = interval(Duration::from_secs(20));
             let mut finalize_locked_stakes_interval = interval(Duration::from_secs(20));
+            let mut update_pool_aum_interval = interval(Duration::from_secs(300));
 
             loop {
                 tokio::select! {
@@ -460,6 +522,13 @@ async fn main() -> anyhow::Result<()> {
                             &db,
                             &program,
                             *median_priority_fee_low.lock().await,
+                        ).await?;
+                    },
+                    _ = update_pool_aum_interval.tick() => {
+                        update_pool_aum(
+                            &program,
+                            *median_priority_fee_low.lock().await,
+                            remaining_accounts.clone(),
                         ).await?;
                     },
                     // Handle incoming messages with a timeout

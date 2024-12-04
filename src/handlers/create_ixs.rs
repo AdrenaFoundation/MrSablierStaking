@@ -139,3 +139,18 @@ pub fn create_finalize_locked_stake_ix(
     let accounts = finalize_locked_stake;
     (args, accounts)
 }
+
+pub fn create_update_pool_aum_ix(
+    payer: &Pubkey,
+) -> (
+    adrena_abi::instruction::UpdatePoolAum,
+    adrena_abi::accounts::UpdatePoolAum,
+) {
+    let args = adrena_abi::instruction::UpdatePoolAum {};
+    let accounts = adrena_abi::accounts::UpdatePoolAum {
+        payer: *payer,
+        cortex: CORTEX_ID,
+        pool: MAIN_POOL_ID,
+    };
+    (args, accounts)
+}
