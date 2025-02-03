@@ -697,6 +697,16 @@ async fn process_finalize_locked_stakes(
     for (user_staking_account_key, locked_stakes) in finalize_locked_stakes_cache.iter() {
         for (stake_resolution_thread_id, end_time) in locked_stakes.iter() {
             if current_time >= *end_time {
+                // check that the locked stake is not resolved == 1
+                let indexed_user_staking_accounts_read =
+                    indexed_user_staking_accounts.read().await;
+                let user_staking_account = indexed_user_staking_accounts_read
+                    .get(user_staking_account_key)
+                    .expect("UserStaking account not found in the indexed user staking accounts");
+                if user_staking_account.locked_stakes.iter().any(|ls| ls.id == *stake_resolution_thread_id && ls.resolved == 1) {
+                    log::info!("Locked stake already resolved - skipping");
+                    continue;
+                }
                 if let Some(owner_pubkey) = get_owner_pubkey(db, user_staking_account_key).await? {
                     let indexed_user_staking_accounts_read =
                         indexed_user_staking_accounts.read().await;
