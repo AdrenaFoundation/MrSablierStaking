@@ -703,6 +703,10 @@ async fn process_finalize_locked_stakes(
                 let user_staking_account = indexed_user_staking_accounts_read
                     .get(user_staking_account_key)
                     .expect("UserStaking account not found in the indexed user staking accounts");
+                if !user_staking_account.locked_stakes.iter().any(|ls| ls.id == *stake_resolution_thread_id) {
+                    log::info!("Locked stake not found in user staking account - skipping");
+                    continue;
+                }
                 if user_staking_account.locked_stakes.iter().any(|ls| ls.id == *stake_resolution_thread_id && ls.resolved == 1) {
                     log::info!("Locked stake already resolved - skipping");
                     continue;
