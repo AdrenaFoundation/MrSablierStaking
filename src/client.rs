@@ -112,6 +112,10 @@ struct Args {
     /// DB Url
     #[clap(long)]
     db_string: String,
+
+    /// Combined certificate
+    #[clap(long)]
+    combined_cert: String,
 }
 
 impl Args {
@@ -277,16 +281,33 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| backoff::Error::transient(e.into()))?;
             log::info!("  <> gRPC, RPC clients connected!");
 
-            // Connect to the DB that contains the table matching the UserStaking accounts to their owners (the onchain data doesn't contain the owner)
-            // Create an SSL connector
-            let builder = SslConnector::builder(SslMethod::tls()).unwrap();
+            // Connect to the DB that contains the table matching the UserStaking accounts to their owners
+            let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+
+            // Use the combined certificate
+            builder.set_ca_file(&args.combined_cert)
+                .map_err(|e| {
+                    log::error!("Failed to set CA file: {}", e);
+                    backoff::Error::transient(anyhow::anyhow!("Failed to set CA file: {}", e))
+                })?;
+
             let connector = MakeTlsConnector::new(builder.build());
-            let (db, db_connection) = tokio_postgres::connect(&args.db_string, connector).await.map_err(|e| backoff::Error::transient(e.into()))?;
+
+            log::info!("Attempting PostgreSQL connection...");
+            let (db, db_connection) = tokio_postgres::connect(&args.db_string, connector)
+                .await
+                .map_err(|e| {
+                    log::error!("PostgreSQL connection error: {:?}", e);
+                    backoff::Error::transient(e.into())
+                })?;
+            log::info!("PostgreSQL connection successful!");
+
             // Open a connection to the DB
             #[allow(unused_assignments)]
             {
                 db_connection_task = Some(tokio::spawn(async move {
                     if let Err(e) = db_connection.await {
+                        log::error!("PostgreSQL connection task error: {}", e);
                         log::error!("connection error: {}", e);
                     }
                 }));
