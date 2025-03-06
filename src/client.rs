@@ -1,4 +1,4 @@
-use crate::handlers::update_pool_aum;
+use adrena_abi::Cortex;
 use adrena_abi::Custody;
 use adrena_abi::Pool;
 use solana_sdk::instruction::AccountMeta;
@@ -69,6 +69,7 @@ const MEAN_PRIORITY_FEE_PERCENTILE_CLAIM_STAKES: u64 = 3500; // 35th
 const PRIORITY_FEE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 pub const RESOLVE_STAKING_ROUND_CU_LIMIT: u32 = 400_000;
 pub const UPDATE_AUM_CU_LIMIT: u32 = 100_000;
+pub const DISTRIBUTE_FEES_CU_LIMIT: u32 = 250_000;
 
 // The threshold to trigger a claim of the stakes for a UserStaking account - we can store up to 32 rounds data per account, we do so to avoid loosing rewards
 pub const AUTO_CLAIM_THRESHOLD_SECONDS: i64 = ROUND_MIN_DURATION_SECONDS * 20; // this means that we will claim ~5 days if the user has not claim during that time
@@ -264,6 +265,8 @@ async fn main() -> anyhow::Result<()> {
             }
             drop(zero_attempts);
 
+
+
             let commitment = args.get_commitment();
             let mut grpc = args
                 .connect()
@@ -278,6 +281,11 @@ async fn main() -> anyhow::Result<()> {
             );
             let program = client
                 .program(adrena_abi::ID)
+                .map_err(|e| backoff::Error::transient(e.into()))?;
+
+            let cortex: Cortex = program
+                .account::<Cortex>(adrena_abi::CORTEX_ID)
+                .await
                 .map_err(|e| backoff::Error::transient(e.into()))?;
             log::info!("  <> gRPC, RPC clients connected!");
 
@@ -519,7 +527,7 @@ async fn main() -> anyhow::Result<()> {
             let mut resolve_staking_rounds_interval = interval(Duration::from_secs(1));
             let mut claim_stakes_interval = interval(Duration::from_secs(20));
             let mut finalize_locked_stakes_interval = interval(Duration::from_secs(20));
-            let mut update_pool_aum_interval = interval(Duration::from_secs(300));
+            let mut distribute_fees_interval = interval(Duration::from_secs(300));
 
             loop {
                 tokio::select! {
@@ -548,10 +556,12 @@ async fn main() -> anyhow::Result<()> {
                             *median_priority_fee_low.lock().await,
                         ).await?;
                     },
-                    _ = update_pool_aum_interval.tick() => {
-                        update_pool_aum(
+                    _ = distribute_fees_interval.tick() => {
+                        handlers::distribute_fees(
                             &program,
                             *median_priority_fee_low.lock().await,
+                            &indexed_custodies,
+                            &cortex,
                             remaining_accounts.clone(),
                         ).await?;
                     },
