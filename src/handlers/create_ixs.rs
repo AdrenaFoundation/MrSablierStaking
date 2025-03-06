@@ -1,7 +1,8 @@
 use {
+    crate::IndexedCustodiesThreadSafe,
     adrena_abi::{
         ADRENA_GOVERNANCE_REALM_CONFIG_ID, ADRENA_GOVERNANCE_REALM_ID,
-        ADRENA_GOVERNANCE_SHADOW_TOKEN_MINT, ADX_MINT, CORTEX_ID, GENESIS_LOCK_ID,
+        ADRENA_GOVERNANCE_SHADOW_TOKEN_MINT, ADX_MINT, ALP_MINT, CORTEX_ID, GENESIS_LOCK_ID,
         GOVERNANCE_PROGRAM_ID, MAIN_POOL_ID, SPL_ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
         USDC_MINT,
     },
@@ -151,6 +152,79 @@ pub fn create_update_pool_aum_ix(
         payer: *payer,
         cortex: CORTEX_ID,
         pool: MAIN_POOL_ID,
+    };
+    (args, accounts)
+}
+
+pub async fn create_distribute_fees_ix(
+    payer: &Pubkey,
+    indexed_custodies: &IndexedCustodiesThreadSafe,
+    protocol_fee_recipient: Pubkey,
+) -> (
+    adrena_abi::instruction::DistributeFees,
+    adrena_abi::accounts::DistributeFees,
+) {
+    let transfer_authority_pda = adrena_abi::pda::get_transfer_authority_pda().0;
+    let lm_staking = adrena_abi::pda::get_staking_pda(&ADX_MINT).0;
+    let lp_staking = adrena_abi::pda::get_staking_pda(&ALP_MINT).0;
+
+    let usdc_custody_pubkey = indexed_custodies
+        .read()
+        .await
+        .iter()
+        .find_map(|(pubkey, custody)| {
+            if custody.mint == USDC_MINT {
+                Some(*pubkey)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+
+    let usdc_oracle = indexed_custodies
+        .read()
+        .await
+        .get(&usdc_custody_pubkey)
+        .unwrap()
+        .oracle;
+
+    let usdc_custody_token_account = indexed_custodies
+        .read()
+        .await
+        .get(&usdc_custody_pubkey)
+        .unwrap()
+        .token_account;
+
+    let args = adrena_abi::instruction::DistributeFees {};
+    let accounts = adrena_abi::accounts::DistributeFees {
+        caller: *payer,
+        transfer_authority: transfer_authority_pda,
+        cortex: CORTEX_ID,
+        pool: MAIN_POOL_ID,
+        lm_staking,
+        lp_staking,
+        lm_token_mint: ADX_MINT,
+        lp_token_mint: ALP_MINT,
+        fee_redistribution_mint: USDC_MINT,
+        lm_staking_reward_token_vault: adrena_abi::pda::get_staking_reward_token_vault_pda(
+            &lm_staking,
+        )
+        .0,
+        lp_staking_reward_token_vault: adrena_abi::pda::get_staking_reward_token_vault_pda(
+            &lp_staking,
+        )
+        .0,
+        referrer_reward_token_vault: adrena_abi::pda::get_referrer_reward_token_vault_pda(
+            &USDC_MINT,
+        )
+        .0,
+        staking_reward_token_custody: usdc_custody_pubkey,
+        staking_reward_token_custody_oracle: usdc_oracle,
+        staking_reward_token_custody_token_account: usdc_custody_token_account,
+        protocol_fee_recipient,
+        token_program: SPL_TOKEN_PROGRAM_ID,
+        system_program: system_program::ID,
+        adrena_program: adrena_abi::ID,
     };
     (args, accounts)
 }
