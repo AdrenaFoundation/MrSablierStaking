@@ -1,6 +1,7 @@
 use {
     crate::{
-        handlers::create_distribute_fees_ix, IndexedCustodiesThreadSafe, DISTRIBUTE_FEES_CU_LIMIT,
+        get_last_trading_prices::get_last_trading_prices, handlers::create_distribute_fees_ix,
+        IndexedCustodiesThreadSafe, DISTRIBUTE_FEES_CU_LIMIT,
     },
     adrena_abi::Cortex,
     anchor_client::Program,
@@ -20,10 +21,13 @@ pub async fn distribute_fees(
 ) -> Result<(), backoff::Error<anyhow::Error>> {
     log::info!("  <*> Distribute Fees");
 
+    let last_trading_prices = get_last_trading_prices().await?;
+
     let (distribute_fees_params, distribute_fees_accounts) = create_distribute_fees_ix(
         &program.payer(),
         indexed_custodies,
         cortex.protocol_fee_recipient,
+        Some(last_trading_prices),
     )
     .await;
 

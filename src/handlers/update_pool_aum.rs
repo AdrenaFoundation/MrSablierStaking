@@ -1,5 +1,8 @@
 use {
-    crate::{handlers::create_update_pool_aum_ix, UPDATE_AUM_CU_LIMIT},
+    crate::{
+        get_last_trading_prices::get_last_trading_prices, handlers::create_update_pool_aum_ix,
+        UPDATE_AUM_CU_LIMIT,
+    },
     anchor_client::Program,
     solana_client::rpc_config::RpcSendTransactionConfig,
     solana_sdk::{
@@ -15,8 +18,10 @@ pub async fn update_pool_aum(
 ) -> Result<(), backoff::Error<anyhow::Error>> {
     log::info!("  <*> Updating AUM");
 
+    let last_trading_prices = get_last_trading_prices().await?;
+
     let (update_pool_aum_params, update_pool_aum_accounts) =
-        create_update_pool_aum_ix(&program.payer());
+        create_update_pool_aum_ix(&program.payer(), Some(last_trading_prices));
 
     let tx = program
         .request()

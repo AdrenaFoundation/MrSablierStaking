@@ -1,10 +1,10 @@
 use {
     crate::IndexedCustodiesThreadSafe,
     adrena_abi::{
-        ADRENA_GOVERNANCE_REALM_CONFIG_ID, ADRENA_GOVERNANCE_REALM_ID,
-        ADRENA_GOVERNANCE_SHADOW_TOKEN_MINT, ADX_MINT, ALP_MINT, CORTEX_ID, GENESIS_LOCK_ID,
-        GOVERNANCE_PROGRAM_ID, MAIN_POOL_ID, SPL_ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
-        USDC_MINT,
+        oracle::ChaosLabsBatchPrices, ADRENA_GOVERNANCE_REALM_CONFIG_ID,
+        ADRENA_GOVERNANCE_REALM_ID, ADRENA_GOVERNANCE_SHADOW_TOKEN_MINT, ADX_MINT, ALP_MINT,
+        CORTEX_ID, GENESIS_LOCK_ID, GOVERNANCE_PROGRAM_ID, MAIN_POOL_ID,
+        SPL_ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID, USDC_MINT,
     },
     solana_sdk::{pubkey::Pubkey, system_program},
 };
@@ -143,16 +143,26 @@ pub fn create_finalize_locked_stake_ix(
 
 pub fn create_update_pool_aum_ix(
     payer: &Pubkey,
+    last_trading_prices: Option<ChaosLabsBatchPrices>,
 ) -> (
     adrena_abi::instruction::UpdatePoolAum,
     adrena_abi::accounts::UpdatePoolAum,
 ) {
-    let args = adrena_abi::instruction::UpdatePoolAum {};
+    let oracle_pda = adrena_abi::pda::get_oracle_pda().0;
+
+    let args = adrena_abi::instruction::UpdatePoolAum {
+        params: adrena_abi::types::UpdatePoolAumParams {
+            oracle_prices: last_trading_prices,
+        },
+    };
+
     let accounts = adrena_abi::accounts::UpdatePoolAum {
         payer: *payer,
         cortex: CORTEX_ID,
         pool: MAIN_POOL_ID,
+        oracle: oracle_pda,
     };
+
     (args, accounts)
 }
 
@@ -160,6 +170,7 @@ pub async fn create_distribute_fees_ix(
     payer: &Pubkey,
     indexed_custodies: &IndexedCustodiesThreadSafe,
     protocol_fee_recipient: Pubkey,
+    last_trading_prices: Option<ChaosLabsBatchPrices>,
 ) -> (
     adrena_abi::instruction::DistributeFees,
     adrena_abi::accounts::DistributeFees,
@@ -167,6 +178,7 @@ pub async fn create_distribute_fees_ix(
     let transfer_authority_pda = adrena_abi::pda::get_transfer_authority_pda().0;
     let lm_staking = adrena_abi::pda::get_staking_pda(&ADX_MINT).0;
     let lp_staking = adrena_abi::pda::get_staking_pda(&ALP_MINT).0;
+    let oracle_pda = adrena_abi::pda::get_oracle_pda().0;
 
     let usdc_custody_pubkey = indexed_custodies
         .read()
@@ -181,13 +193,6 @@ pub async fn create_distribute_fees_ix(
         })
         .unwrap();
 
-    let usdc_oracle = indexed_custodies
-        .read()
-        .await
-        .get(&usdc_custody_pubkey)
-        .unwrap()
-        .oracle;
-
     let usdc_custody_token_account = indexed_custodies
         .read()
         .await
@@ -195,7 +200,11 @@ pub async fn create_distribute_fees_ix(
         .unwrap()
         .token_account;
 
-    let args = adrena_abi::instruction::DistributeFees {};
+    let args = adrena_abi::instruction::DistributeFees {
+        params: adrena_abi::types::DistributeFeesParams {
+            oracle_prices: last_trading_prices,
+        },
+    };
     let accounts = adrena_abi::accounts::DistributeFees {
         caller: *payer,
         transfer_authority: transfer_authority_pda,
@@ -219,8 +228,8 @@ pub async fn create_distribute_fees_ix(
         )
         .0,
         staking_reward_token_custody: usdc_custody_pubkey,
-        staking_reward_token_custody_oracle: usdc_oracle,
         staking_reward_token_custody_token_account: usdc_custody_token_account,
+        oracle: oracle_pda,
         protocol_fee_recipient,
         token_program: SPL_TOKEN_PROGRAM_ID,
         system_program: system_program::ID,

@@ -1,12 +1,8 @@
-use adrena_abi::Cortex;
-use adrena_abi::Custody;
-use adrena_abi::Pool;
-use solana_sdk::instruction::AccountMeta;
 use {
     crate::{process_stream_message::process_stream_message, update_caches::update_claim_cache},
     adrena_abi::{
-        Discriminator, Staking, StakingType, UserStaking, ADX_MINT, ALP_MINT,
-        ROUND_MIN_DURATION_SECONDS,
+        Cortex, Custody, Discriminator, Pool, Staking, StakingType, UserStaking, ADX_MINT,
+        ALP_MINT, ROUND_MIN_DURATION_SECONDS,
     },
     anchor_client::{solana_sdk::signer::keypair::read_keypair_file, Client, Cluster, Program},
     backoff::{future::retry, ExponentialBackoff},
@@ -17,7 +13,7 @@ use {
     postgres_openssl::MakeTlsConnector,
     priority_fees::fetch_mean_priority_fee,
     solana_client::rpc_filter::{Memcmp, RpcFilterType},
-    solana_sdk::{pubkey::Pubkey, signature::Keypair},
+    solana_sdk::{instruction::AccountMeta, pubkey::Pubkey, signature::Keypair},
     std::{collections::HashMap, env, str::FromStr, sync::Arc, time::Duration},
     tokio::{
         sync::{Mutex, RwLock},
@@ -55,6 +51,7 @@ type StakingRoundNextResolveTimeCacheThreadSafe = Arc<RwLock<HashMap<Pubkey, i64
 // Cache the list of UserStaking accounts and their stake ids/ time at which it may be finalized
 type FinalizeLockedStakesCacheThreadSafe = Arc<RwLock<HashMap<Pubkey, HashMap<u64, i64>>>>;
 
+pub mod get_last_trading_prices;
 pub mod handlers;
 pub mod priority_fees;
 pub mod process_stream_message;
@@ -483,8 +480,6 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let mut custodies_accounts: Vec<AccountMeta> = vec![];
-            let mut custodies_oracle_accounts: Vec<AccountMeta> = vec![];
-            let mut custodies_trade_oracle_accounts: Vec<AccountMeta> = vec![];
             for key in pool.custodies.iter() {
                 if key != &Pubkey::default() {
 
@@ -493,26 +488,10 @@ async fn main() -> anyhow::Result<()> {
                         is_signer: false,
                         is_writable: false,
                     });
-
-                    let oracle_key = indexed_custodies.read().await[key].oracle;
-                    custodies_oracle_accounts.push(AccountMeta {
-                        pubkey: oracle_key,
-                        is_signer: false,
-                        is_writable: false,
-                    });
-
-                    let trade_oracle_key = indexed_custodies.read().await[key].trade_oracle;
-                    if trade_oracle_key != oracle_key {
-                        custodies_trade_oracle_accounts.push(AccountMeta {
-                            pubkey: trade_oracle_key,
-                            is_signer: false,
-                            is_writable: false,
-                        });
-                    }
                 }
             }
 
-            let remaining_accounts = [custodies_accounts, custodies_oracle_accounts, custodies_trade_oracle_accounts].concat();
+            let remaining_accounts = [custodies_accounts].concat();
 
             // ////////////////////////////////////////////////////////////////
             // CORE LOOP
