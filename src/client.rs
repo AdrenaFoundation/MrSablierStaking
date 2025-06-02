@@ -506,7 +506,7 @@ async fn main() -> anyhow::Result<()> {
             let mut resolve_staking_rounds_interval = interval(Duration::from_secs(1));
             let mut claim_stakes_interval = interval(Duration::from_secs(20));
             let mut finalize_locked_stakes_interval = interval(Duration::from_secs(20));
-            let mut distribute_fees_interval = interval(Duration::from_secs(300));
+            let mut distribute_fees_interval = interval(Duration::from_secs(5));
 
             loop {
                 tokio::select! {
